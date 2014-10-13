@@ -859,6 +859,6 @@ if __name__ == '__main__':
         print(n+1)
     jpg_dec.Close()
 
-    e = OMX_Deinit()
-    assert (e == OMX_ErrorNone)
+#    e = OMX_Deinit()
+#    assert (e == OMX_ErrorNone)
 
