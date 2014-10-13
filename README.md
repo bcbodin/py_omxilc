@@ -41,3 +41,9 @@ Copyright (c) 2014 Binh Bui
 Redistribution and use in source and binary forms, with or without
 modification, are permitted.
 
+This package requires the following C libraries:
+- libopenmaxil.so
+- libbcm_host.so
+
+These libraries can be otained at:
+https://github.com/raspberrypi/firmware/tree/master/opt/vc/lib
