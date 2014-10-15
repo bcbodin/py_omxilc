@@ -1,5 +1,6 @@
 """
 Module Name: omxjpgdec.py
+Version: 1.1 (2014-10-14)
 Python Version: 2.7.3
 Platform: Raspberry Pi
 
@@ -348,11 +349,11 @@ class JPEGDecoder(object):
     #---------------------------------------------------------------------------
     def SetupPipe(self):
         """
-        Once the settings of the decoder output port change while the first
-        JPEG image is converted, set the color format of the decoder output
-        port, configure the resizer, place a tunnel from the decoder output
-        port to the resizer input port, and allocate and supply buffer(s) to
-        the resizer output port.
+        Once the settings of the decoder output port change after the first
+        input buffer load is converted, set the color format of the decoder
+        output port, configure the resizer, place a tunnel from the decoder
+        output port to the resizer input port, and allocate and supply buffer(s)
+        to the resizer output port.
 
         This first-time handler is adapted from the hello_jpeg demo program by
         Matt Ownby and Anthong Sale.
@@ -492,7 +493,7 @@ class JPEGDecoder(object):
             height          <int>       Frame height (optional):
                                             -1: no change.
             num_buffers     <int>       Number of buffers (optional):
-                                            -1: no change.
+                                            < min.: no change.
 
         Return value:
             <int>       Error code: 0 for success, not 0 for failure.
@@ -595,9 +596,16 @@ class JPEGDecoder(object):
         self.decoder.c_app_data.port_changed = 0
 
         # Get buffer supplier for decoder output port.
+        # With the printout disabled in the port settings changed event handler,
+        # calling this method generates a PortUnpopulated error event even
+        # though it does not return any error. This error is fatal after an
+        # unpredictable number of continuous conversions. The solution seems
+        # to be to put sufficient delay in the port settings changed handler
+        # before returning from it.
         e, bs = self.decoder.GetBufferSupplier(self.decoder_out_port)
         if e != OMX_ErrorNone:
-            return e
+            print '%s: Failed to get buffer supplier for decoder output.'
+            bs = OMX_BufferSupplyInput
 
         # Disable resizer input and decoder output.
         # Supplier port is disabled first and non-supplier port second.
@@ -634,6 +642,7 @@ class JPEGDecoder(object):
             e |= self.decoder.EnablePort(self.decoder_out_port, self.timeout)
             self.resizer.WaitForPortEnabled(self.resizer_in_port, self.timeout)
 
+        # Resizer output port should generate a settings change event.
         self.resizer.WaitForPortSettingsChanged(self.resizer_out_port)
 
         return e
@@ -688,6 +697,7 @@ class JPEGDecoder(object):
             c_rsz_dat = self.resizer.c_app_data
 
             timer = 0
+            first_load = True
             while ((c_dec_dat.port_eos != self.decoder_out_port) and
                    (timer < 1000)):
                 while to_read > 0:
@@ -715,11 +725,16 @@ class JPEGDecoder(object):
                             cp_in_buf_hdr[0].nFlags = OMX_BUFFERFLAG_EOS
                         self.decoder.EmptyThisBuffer(cp_in_buf_hdr)
 
+                        # If first buffer load, wait for decoder output settings changed event.
+                        if first_load:
+                            first_load = False
+                            self.decoder.WaitForPortSettingsChanged(self.decoder_out_port)
                         self.decoderHandleOutSettingsChanged()
 
-                        cp_out_buf_hdr = c_rsz_dat.pp_out_buf_hdr[0]
-#                        c_out_buf_prv = ctypes.cast(cp_out_buf_hdr[0].pAppPrivate, pBUFHDR_APPT)[0]
-                        self.resizer.FillThisBuffer(cp_out_buf_hdr)
+                        if self.num_out_buf > 0:
+                            cp_out_buf_hdr = c_rsz_dat.pp_out_buf_hdr[0]
+#                            c_out_buf_prv = ctypes.cast(cp_out_buf_hdr[0].pAppPrivate, pBUFHDR_APPT)[0]
+                            self.resizer.FillThisBuffer(cp_out_buf_hdr)
 
                         if to_read <= 0:
                             break
@@ -853,12 +868,22 @@ class JPEGDecoder(object):
 if __name__ == '__main__':
 
     jpg_dec = JPEGDecoder(out_width=1104, out_height=621)
-    fn = '101.jpg'
-    for n in range(10):
-        jpg_dec.ConvertFromFile(fn)
-        print(n+1)
-    jpg_dec.Close()
 
-#    e = OMX_Deinit()
-#    assert (e == OMX_ErrorNone)
+    fn = '101.jpg'
+    num_frames = 1000
+    t1 = time.time()
+    for n in range(num_frames):
+        jpg_dec.ConvertFromFile(fn)
+        print n+1
+    t2 = time.time()
+    jpg_dec.Close()
+    dt = t2 - t1
+    print 'Elapsed time:', dt, 's'
+    print 'Frames/sec:', num_frames/dt
+
+    # Wait a little to allow JPEG decoder to really close before
+    # de-initializing OpenMAX IL core.
+    time.sleep(.25)
+    e = OMX_Deinit()
+    assert (e == OMX_ErrorNone)
 
