@@ -348,7 +348,7 @@ class omxComponent(object):
         # Create a C structure of default callback functions.
         self.c_callbacks = OMX_CALLBACKTYPE()
 
-        cfp = CFP_EVENT_HANDLER(defEventHandler)
+        cfp = CFP_EVENT_HANDLER(_defEventHandler)
         self.c_callbacks.EventHandler = cfp
 
         if self.flags & ILCLIENT_ENABLE_INPUT_BUFFERS:
