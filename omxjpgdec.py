@@ -874,7 +874,7 @@ if __name__ == '__main__':
     fn = '101.jpg'
     num_frames = 1000
     t1 = time.time()
-    if not self.alt_setup:
+    if not jpg_dec.alt_setup:
         for n in range(num_frames):
             jpg_dec.ConvertFromFile(fn)
             print n+1
