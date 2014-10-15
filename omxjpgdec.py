@@ -673,6 +673,7 @@ class JPEGDecoder(object):
         if self.alt_setup:
             cons_print('%s.%s: This cannot run with the alternate setup.' %
                 (self.name, 'ConvertFromFile'))
+            return
 
         if not self.ready:
             cons_print('%s: Not ready.' % self.name)
@@ -772,6 +773,7 @@ class JPEGDecoder(object):
         if not self.alt_setup:
             cons_print('%s.%s: This cannot run without the alternate setup.' %
                 (self.name, 'AltConvertFromFile'))
+            return
 
         if not self.ready:
             cons_print('%s: Not ready.' % self.name)
@@ -872,14 +874,20 @@ if __name__ == '__main__':
     fn = '101.jpg'
     num_frames = 1000
     t1 = time.time()
-    for n in range(num_frames):
-        jpg_dec.ConvertFromFile(fn)
-        print n+1
+    if not self.alt_setup:
+        for n in range(num_frames):
+            jpg_dec.ConvertFromFile(fn)
+            print n+1
+    else:
+        for n in range(num_frames):
+            jpg_dec.AltConvertFromFile(fn)
+            print n+1
     t2 = time.time()
-    jpg_dec.Close()
     dt = t2 - t1
     print 'Elapsed time:', dt, 's'
     print 'Frames/sec:', num_frames/dt
+    
+    jpg_dec.Close()
 
     # Wait a little to allow JPEG decoder to really close before
     # de-initializing OpenMAX IL core.
