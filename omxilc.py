@@ -242,7 +242,7 @@ def _defEventHandler(cv_handle, cp_app_data, event, data1, data2, cp_event_data)
         # Checking nPopulated flag in the port definition structure does not
         # help because it is true regardless of the error. The best solution
         # seems to be to wait long enough before setting a flag and returning
-		# from this handler.
+        # from this handler.
         if not _verbose:
             time.sleep(0.01)
 
