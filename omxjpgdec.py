@@ -668,27 +668,36 @@ class JPEGDecoder(object):
         """
         Convert a JPEG image file to the specified color format and resize the
         converted image to the specified dimensions.
+        
+        Return value:
+            <int>       Error code: 0 for failure, file size for success.
         """
+        
+        e = 0
 
         if self.alt_setup:
             cons_print('%s.%s: This cannot run with the alternate setup.' %
                 (self.name, 'ConvertFromFile'))
-            return
+            return e
 
         if not self.ready:
             cons_print('%s: Not ready.' % self.name)
-            return
+            return e
 
         try:
             f = open(file_name)
         except IOError:
             cons_print('File %s not found.' % file_name)
-            return
+            return e
+            
+        f_size = os.path.getsize(file_name)
+        if f_size <= 0:
+            f.close()
+            return e
 
         with f:
-            to_read = os.path.getsize(file_name)
             cons_print('%s: Converting file %s (%d bytes) to %s...' %
-                (self.name, file_name, to_read, omx_color_format_names[self.out_format]))
+                (self.name, file_name, f_size, omx_color_format_names[self.out_format]))
 
             self.FreeIOBuffers()
             self.decoder.ResetCallbackPortFlags()
@@ -697,6 +706,7 @@ class JPEGDecoder(object):
             c_dec_dat = self.decoder.c_app_data
             c_rsz_dat = self.resizer.c_app_data
 
+            to_read = f_size
             timer = 0
             first_load = True
             while ((c_dec_dat.port_eos != self.decoder_out_port) and
@@ -758,9 +768,10 @@ class JPEGDecoder(object):
                     timer += 1
 
                 if c_rsz_dat.port_filled == self.resizer_out_port:
+                    e = f_size
                     cons_print('%s: Conversion successful.' % self.name)
 
-        return
+        return e
 
     #---------------------------------------------------------------------------
     def AltConvertFromFile(self, file_name):
@@ -768,27 +779,36 @@ class JPEGDecoder(object):
         Alternate Version
         Convert a JPEG image file to the specified color format and resize the
         converted image to the specified dimensions.
+        
+        Return value:
+            <int>       Error code: 0 for failure, file size for success.
         """
+        
+        e = 0
 
         if not self.alt_setup:
             cons_print('%s.%s: This cannot run without the alternate setup.' %
                 (self.name, 'AltConvertFromFile'))
-            return
+            return e
 
         if not self.ready:
             cons_print('%s: Not ready.' % self.name)
-            return
+            return e
 
         try:
             f = open(file_name)
         except IOError:
             cons_print('File %s not found.' % file_name)
-            return
+            return e
+        
+        f_size = os.path.getsize(file_name)
+        if f_size <= 0:
+            f.close()
+            return e
 
         with f:
-            to_read = os.path.getsize(file_name)
             cons_print('%s: Converting file %s (%d bytes) to %s...' %
-                (self.name, file_name, to_read, omx_color_format_names[self.out_format]))
+                (self.name, file_name, f_size, omx_color_format_names[self.out_format]))
 
             self.FreeIOBuffers()
             self.decoder.ResetCallbackPortFlags()
@@ -797,6 +817,7 @@ class JPEGDecoder(object):
             c_dec_dat = self.decoder.c_app_data
             c_rsz_dat = self.resizer.c_app_data
 
+            to_read = f_size
             timer = 0
             while ((c_dec_dat.port_eos != self.decoder_out_port) and
                    (timer < 1000)):
@@ -861,9 +882,10 @@ class JPEGDecoder(object):
                     timer += 1
 
                 if c_rsz_dat.port_filled == self.resizer_out_port:
+                    e = f_size
                     cons_print('%s: Conversion successful.' % self.name)
 
-        return
+        return e
 
 #===============================================================================
 
@@ -884,8 +906,8 @@ if __name__ == '__main__':
             print n+1
     t2 = time.time()
     dt = t2 - t1
-    print 'Elapsed time:', dt, 's'
-    print 'Frames/sec:', num_frames/dt
+    print 'Elapsed time: %.3f s' % dt
+    print 'Frames/sec: %.3f' % (num_frames/dt)
     
     jpg_dec.Close()
 
