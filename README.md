@@ -9,7 +9,7 @@ developed by Peter de Rivaz.
 The component class omxComponent is defined in the main module omxilc.py. ctypes is used to call
 the core and component methods provided by the Broadcom C library libopenmaxil.so.
 
-There are several other modules in the package. The majority of them are simply python converion of
+There are several other modules in the package. The majority of them are simply python conversions of
 the OpenMAX IL standard C header files. omxerr.py and omxnames.py are supporting modules for omxilc.py.
 The converted headers are: omx_audio.py, omx_component.py, omx_core.py, omx_image.py, omx_index.py,
 omx_ivcommon.py, omx_other.py, omx_types.py, and omx_video.py. The module omxbcport.py defines all
