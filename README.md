@@ -34,7 +34,11 @@ The JPEG decoder was run from the console with verbose on and 2000 continuous co
 to 162 ms/frame or 6.2 frames/sec.
 
 With the verbose off, the JPEG decoder causes the system to hang after some number of iterations.
-I think that there are some sort of synchronisation/timing issues.
+I think that there is some sort of synchronisation/timing issue. The fatal error appears to be
+a PortUnpopulated error event that occurs when the GetBufferSupplier method is called following
+a port settings change event. Put a 10 ms delay in the port settings changed event handler seems
+to resolve the issue. With this solution in place, I managed to continuously convert a 1920x1080
+JPEG file 1000 times. The total elapsed time is 95.19 s which amouts 10.5 frames/sec.
 
 Copyright (c) 2014 Binh Bui
 
