@@ -1,5 +1,6 @@
 """
 Module Name: omxilc.py
+Version: 1.1 (2014-10-14)
 Python Version: 2.7.3
 
 This module defines classes for writing OMX IL client applications.
@@ -61,7 +62,7 @@ from omxnames import *
 import time
 
 import omxerr       # Import this module to enable error printouts.
-_verbose = True     # Set this variable to True to enable console printouts.
+_verbose = False     # Set this variable to True to enable console printouts.
 
 #-------------------------------------------------------------------------------
 # Flags for controlling the creation of a component.
@@ -152,16 +153,16 @@ if '_verbose' not in dir():
     _verbose = False
 
 if _verbose:
-    cons_print_locked = 0
+    _cons_print_locked = 0
     def cons_print(*args):
-        global cons_print_locked
-        while cons_print_locked:
+        global _cons_print_locked
+        while _cons_print_locked:
             time.sleep(0.001)
-        cons_print_locked = 1
+        _cons_print_locked = 1
         for arg in args:
             print arg,
         print ''
-        cons_print_locked = 0
+        _cons_print_locked = 0
 else:
     def cons_print(*args):
         pass
@@ -188,21 +189,21 @@ if 'print_error' not in dir():
 
 #-------------------------------------------------------------------------------
 # Default EventHandler callback for components.
-
 def _defEventHandler(cv_handle, cp_app_data, event, data1, data2, cp_event_data):
 
     cp_comp = ctypes.cast(cp_app_data, pCOMPONENT_CBDT)
     c_comp = cp_comp[0]
+    global _verbose
 
     if event == OMX_EventCmdComplete:
         c_comp.cmd_complete = 1
 #        cons_print('%s event: %s complete.' %
-#                (c_comp.name, omx_cmd_names[data1]))
+#            (c_comp.name, omx_cmd_names[data1]))
 
         if data1 == OMX_CommandStateSet:
             c_comp.current_state = data2    # state reached
             cons_print('%s event: Now in %s.' %
-                    (c_comp.name, omx_state_names[data2]))
+                (c_comp.name, omx_state_names[data2]))
 
         elif data1 == OMX_CommandFlush:
             c_comp.port_flushed = data2
@@ -223,15 +224,35 @@ def _defEventHandler(cv_handle, cp_app_data, event, data1, data2, cp_event_data)
         elif data1 == OMX_CommandMarkBuffer:
             c_comp.port_buf_marked = data2
             cons_print('%s event: Buffer marked by port %d.' %
-                    (c_comp.name, data2))
+                (c_comp.name, data2))
 
     elif event == OMX_EventError:
-        print_error(data1, c_comp.name, c_comp.method)
+        print_error(data1, c_comp.name + ' event', ' ' + c_comp.method)
 
     elif event == OMX_EventMark:
-        cons_print('%s event : Marked buffer received.' % c_comp.name)
+        cons_print('%s event: Marked buffer received.' % c_comp.name)
 
     elif event == OMX_EventPortSettingsChanged:
+        # When _verbose is off, and GetBufferSupplier is called following a
+        # port settings changed event, a PortUnpopulated error event occurs
+        # even though the called method does not return any error.
+        # The error event does not occur when _verbose if on because the
+        # printout in this event handler is slow enough to put sufficient
+        # delay between the event occurence and the method call.
+        # Checking nPopulated flag in the port definition structure does not
+        # help because it is true regardless of the error. The best solution
+        # seems to be to wait long enough before setting a flag and returning
+		# from this handler.
+        if not _verbose:
+#            timer = 0
+#            ec, c_port_def = self.GetPortDefinition(data1)
+#            while (not c_port_def.bPopulated and (timer < self.timeout)):
+#                time.sleep(0.001)
+#                timer += 1
+#                ec, c_port_def = self.GetPortDefinition(data1)
+
+            time.sleep(0.01)
+
         c_comp.port_changed = data1
         cons_print('%s event: Port %d settings changed.' % (c_comp.name, data1))
 
@@ -322,10 +343,12 @@ class omxComponent(object):
         self.c_app_data = COMPONENT_CBDT()
         self.c_app_data.name = self.name[:31]
 
+        #-----------------------------------------------------------------------
+
         # Create a C structure of default callback functions.
         self.c_callbacks = OMX_CALLBACKTYPE()
 
-        cfp = CFP_EVENT_HANDLER(_defEventHandler)
+        cfp = CFP_EVENT_HANDLER(defEventHandler)
         self.c_callbacks.EventHandler = cfp
 
         if self.flags & ILCLIENT_ENABLE_INPUT_BUFFERS:
@@ -453,6 +476,8 @@ class omxComponent(object):
     def Close(self):
         """
         Close the component.
+        The IL client application is responsible for bringing the component
+        back to state Loaded before calling this method.
 
         Return value:
             <int>       Error code.
@@ -538,13 +563,22 @@ class omxComponent(object):
             timeout         <int>       Time-out in ms.
         """
 
+#        timer = 0
+#        while ((self.c_app_data.port_disabled != port_index) and
+#                (timer < timeout)):
+#            time.sleep(0.001)
+#            timer += 1
+#        if self.c_app_data.port_disabled != port_index:
+#            cons_print('%s: Port %d not disabled after %d ms.' %
+#                (self.name, port_index, timeout))
+
         timer = 0
-        while ((self.c_app_data.port_disabled != port_index) and
-                (timer < timeout)):
+        e, c_port_def = self.GetPortDefinition(port_index)
+        while (c_port_def.bEnabled and (timer < timeout)):
             time.sleep(0.001)
             timer += 1
-
-        if self.c_app_data.port_disabled != port_index:
+            e, c_port_def = self.GetPortDefinition(port_index)
+        if c_port_def.bEnabled:
             cons_print('%s: Port %d not disabled after %d ms.' %
                 (self.name, port_index, timeout))
 
@@ -558,13 +592,22 @@ class omxComponent(object):
             timeout         <int>       Time-out in ms.
         """
 
+#        timer = 0
+#        while ((self.c_app_data.port_enabled != port_index) and
+#                (timer < timeout)):
+#            time.sleep(0.001)
+#            timer += 1
+#        if self.c_app_data.port_enabled != port_index:
+#            cons_print('%s: Port %d not enabled after %d ms.' %
+#                (self.name, port_index, timeout))
+
         timer = 0
-        while ((self.c_app_data.port_enabled != port_index) and
-                (timer < timeout)):
+        e, c_port_def = self.GetPortDefinition(port_index)
+        while (not c_port_def.bEnabled and (timer < timeout)):
             time.sleep(0.001)
             timer += 1
-
-        if self.c_app_data.port_enabled != port_index:
+            e, c_port_def = self.GetPortDefinition(port_index)
+        if not c_port_def.bEnabled:
             cons_print('%s: Port %d not enabled after %d ms.' %
                 (self.name, port_index, timeout))
 
@@ -1937,20 +1980,20 @@ class omxComponent(object):
             c_port_def      <c_struct>  OMX_PARAM_PORTDEFINITIONTYPE structure.
         """
 
-        cons_print('%s: Port %d Definition' %
+        print('%s: Port %d Definition' %
                 (self.name, c_port_def.nPortIndex))
         dir_names = ('input', 'output')
-        cons_print('    eDir =', dir_names[c_port_def.eDir])
-        cons_print('    nBufferCountActual =', c_port_def.nBufferCountActual)
-        cons_print('    nBufferCountMin =', c_port_def.nBufferCountMin)
-        cons_print('    nBufferSize =', c_port_def.nBufferSize)
+        print('    eDir = %s' % dir_names[c_port_def.eDir])
+        print('    nBufferCountActual = %d' % c_port_def.nBufferCountActual)
+        print('    nBufferCountMin = %d' % c_port_def.nBufferCountMin)
+        print('    nBufferSize = %d' % c_port_def.nBufferSize)
         no_yes = ('no', 'yes')
-        cons_print('    bEnabled =', no_yes[c_port_def.bEnabled])
-        cons_print('    bPopulated =', no_yes[c_port_def.bPopulated])
+        print('    bEnabled = %s' % no_yes[c_port_def.bEnabled])
+        print('    bPopulated = %s' % no_yes[c_port_def.bPopulated])
         type_names = ('audio', 'video', 'image', 'other')
-        cons_print('    eDomain =', type_names[c_port_def.eDomain])
-        cons_print('    bBuffersContiguous =', c_port_def.bBuffersContiguous)
-        cons_print('    nBufferAlignment =', c_port_def.nBufferAlignment)
+        print('    eDomain = %s' % type_names[c_port_def.eDomain])
+        print('    bBuffersContiguous = %s' % no_yes[c_port_def.bBuffersContiguous])
+        print('    nBufferAlignment = %d' % c_port_def.nBufferAlignment)
 
         if c_port_def.eDomain == 0: # audio port domain
             printAudioPortDefinition(c_port_def.format.audio)
@@ -1974,12 +2017,12 @@ class omxComponent(object):
             c_audioportdef  <c_struct>  OMX_AUDIO_PORTDEFINITIONTYPE structure.
         """
 
-        cons_print('%sAudio Port Format:' % name)
-#        cons_print('%s    cMIMEType = %s' %
+        print('%sAudio Port Format:' % name)
+#        print('%s    cMIMEType = %s' %
 #            (indent, ctypes.string_at(c_audioportdef.cMIMEType)))
-        cons_print('%s    bFlagErrorConcealment = %d' %
+        print('%s    bFlagErrorConcealment = %d' %
             (indent, c_audioportdef.bFlagErrorConcealment))
-        cons_print('%s    eEncoding = %s' %
+        print('%s    eEncoding = %s' %
             (indent, omx_audio_coding_names[c_audioportdef.eEncoding]))
 
     #---------------------------------------------------------------------------
@@ -1992,23 +2035,23 @@ class omxComponent(object):
             c_videoportdef  <c_struct>  OMX_VIDEO_PORTDEFINITIONTYPE structure.
         """
 
-        cons_print('%sVideo Port Format:' % name)
-#        cons_print('%s    cMIMEType = %s' %
+        print('%sVideo Port Format:' % name)
+#        print('%s    cMIMEType = %s' %
 #            (indent, ctypes.string_at(c_videoportdef.cMIMEType)))
-        cons_print('%s    nFrameWidth = %d' %
+        print('%s    nFrameWidth = %d' %
             (indent, c_videoportdef.nFrameWidth))
-        cons_print('%s    nFrameHeight = %d' %
+        print('%s    nFrameHeight = %d' %
             (indent, c_videoportdef.nFrameHeight))
-        cons_print('%s    nStride = %d' % (indent, c_videoportdef.nStride))
-        cons_print('%s    nSliceHeight = %d' %
+        print('%s    nStride = %d' % (indent, c_videoportdef.nStride))
+        print('%s    nSliceHeight = %d' %
             (indent, c_videoportdef.nSliceHeight))
-        cons_print('%s    nBitrate = %d' % (indent, c_videoportdef.nBitrate))
-        cons_print('%s    xFramerate = %d' % (indent, c_videoportdef.xFramerate))
-        cons_print('%s    bFlagErrorConcealment = %d' %
+        print('%s    nBitrate = %d' % (indent, c_videoportdef.nBitrate))
+        print('%s    xFramerate = %d' % (indent, c_videoportdef.xFramerate))
+        print('%s    bFlagErrorConcealment = %d' %
             (indent, c_videoportdef.bFlagErrorConcealment))
-        cons_print(indent, '    eCompressionFormat = %s' %
+        print(indent, '    eCompressionFormat = %s' %
             (indent, omx_video_coding_names[c_videoportdef.eCompressionFormat]))
-        cons_print(indent, '    eColorFormat = %s' %
+        print(indent, '    eColorFormat = %s' %
             (indent, omx_color_format_names[c_videoportdef.eColorFormat]))
 
     #---------------------------------------------------------------------------
@@ -2021,21 +2064,21 @@ class omxComponent(object):
             c_imgportdef    <c_struct>  OMX_IMAGE_PORTDEFINITIONTYPE structure.
         """
 
-        cons_print('%sImage Port Format:' % name)
-#        cons_print('%s    cMIMEType = %s' %
+        print('%sImage Port Format:' % name)
+#        print('%s    cMIMEType = %s' %
 #            (indent, ctypes.string_at(c_imgportdef.cMIMEType)))
-        cons_print('%s    nFrameWidth = %d' %
+        print('%s    nFrameWidth = %d' %
             (indent, c_imgportdef.nFrameWidth))
-        cons_print('%s    nFrameHeight = %d' %
+        print('%s    nFrameHeight = %d' %
             (indent, c_imgportdef.nFrameHeight))
-        cons_print('%s    nStride = %d' % (indent, c_imgportdef.nStride))
-        cons_print('%s    nSliceHeight = %d' %
+        print('%s    nStride = %d' % (indent, c_imgportdef.nStride))
+        print('%s    nSliceHeight = %d' %
             (indent, c_imgportdef.nSliceHeight))
-        cons_print('%s    bFlagErrorConcealment = %d' %
+        print('%s    bFlagErrorConcealment = %d' %
             (indent, c_imgportdef.bFlagErrorConcealment))
-        cons_print('%s    eCompressionFormat = %s' %
+        print('%s    eCompressionFormat = %s' %
             (indent, omx_image_coding_names[c_imgportdef.eCompressionFormat]))
-        cons_print('%s    eColorFormat = %s' %
+        print('%s    eColorFormat = %s' %
             (indent, omx_color_format_names[c_imgportdef.eColorFormat]))
         
     #---------------------------------------------------------------------------
@@ -2048,8 +2091,8 @@ class omxComponent(object):
             c_otherportdef  <c_struct>  OMX_OTHER_PORTDEFINITIONTYPE structure.
         """
 
-        cons_print('%sOther-Type Port Format:' % name)
-        cons_print('%s    eFormat = %s' %
+        print('%sOther-Type Port Format:' % name)
+        print('%s    eFormat = %s' %
             (indent, omx_other_data_type_names[c_otherportdef.eFormat]))
 
     #---------------------------------------------------------------------------
@@ -2066,25 +2109,25 @@ class omxComponent(object):
             ctypes.sizeof() will have 8 extra bytes due to 8-byte alignment.
         """
 
-        cons_print('Buffer Header:')
-        cons_print('    nSize =', c_buf_hdr.nSize)
-        cons_print('    nVersion =', hex(c_buf_hdr.nVersion.nVersion))
-        cons_print('    pBuffer =', c_buf_hdr.pBuffer)
-        cons_print('    nAllocLen =', c_buf_hdr.nAllocLen)
-        cons_print('    nFilledLen =', c_buf_hdr.nFilledLen)
-        cons_print('    nOffet =', c_buf_hdr.nOffset)
-        cons_print('    pAppPrivate =', c_buf_hdr.pAppPrivate)
-        cons_print('    pPlatformPrivate =', c_buf_hdr.pPlatformPrivate)
-        cons_print('    pInputPortPrivate =', c_buf_hdr.pInputPortPrivate)
-        cons_print('    nOutputPortPrivate =', c_buf_hdr.pOutputPortPrivate)
-        cons_print('    hMarkTargetComponent =', c_buf_hdr.hMarkTargetComponent)
-        cons_print('    pMarkData =', c_buf_hdr.pMarkData)
-        cons_print('    nTickCount =', c_buf_hdr.nTickCount)
-        cons_print('    nTimeStamp0 =', hex(c_buf_hdr.nTimeStamp0))
-        cons_print('    nTimeStamp1 =', hex(c_buf_hdr.nTimeStamp1))
-        cons_print('    nFlags =', hex(c_buf_hdr.nFlags))
-        cons_print('    nOutputPortIndex =', c_buf_hdr.nOutputPortIndex)
-        cons_print('    nInputPortIndex =', c_buf_hdr.nInputPortIndex)
+        print('Buffer Header:')
+        print('    nSize =', c_buf_hdr.nSize)
+        print('    nVersion =', hex(c_buf_hdr.nVersion.nVersion))
+        print('    pBuffer =', c_buf_hdr.pBuffer)
+        print('    nAllocLen =', c_buf_hdr.nAllocLen)
+        print('    nFilledLen =', c_buf_hdr.nFilledLen)
+        print('    nOffet =', c_buf_hdr.nOffset)
+        print('    pAppPrivate =', c_buf_hdr.pAppPrivate)
+        print('    pPlatformPrivate =', c_buf_hdr.pPlatformPrivate)
+        print('    pInputPortPrivate =', c_buf_hdr.pInputPortPrivate)
+        print('    nOutputPortPrivate =', c_buf_hdr.pOutputPortPrivate)
+        print('    hMarkTargetComponent =', c_buf_hdr.hMarkTargetComponent)
+        print('    pMarkData =', c_buf_hdr.pMarkData)
+        print('    nTickCount =', c_buf_hdr.nTickCount)
+        print('    nTimeStamp0 =', hex(c_buf_hdr.nTimeStamp0))
+        print('    nTimeStamp1 =', hex(c_buf_hdr.nTimeStamp1))
+        print('    nFlags =', hex(c_buf_hdr.nFlags))
+        print('    nOutputPortIndex =', c_buf_hdr.nOutputPortIndex)
+        print('    nInputPortIndex =', c_buf_hdr.nInputPortIndex)
 
     #---------------------------------------------------------------------------
     def Info(self):
@@ -2096,7 +2139,7 @@ class omxComponent(object):
             num_ports = self.num_ports[domain_name]
             if num_ports <= 0:
                 continue
-            cons_print('%s has %d %s-type ports starting at %d.' %
+            print('%s has %d %s-type ports starting at %d.' %
                (self.name, num_ports, domain_name,
                 self.port_indices[domain_name+'1']))
 
@@ -2111,11 +2154,11 @@ class omxComponent(object):
                 e1, stream_num = self.GetActiveStream(port_index)
                 if e != OMX_ErrorNone or e1 != OMX_ErrorNone:
                     continue
-                cons_print('%s: Port %d has %d streams. Active stream = %d.' %
+                print('%s: Port %d has %d streams. Active stream = %d.' %
                     (self.name, port_index, num_streams, stream_num))
 
         e, state = self.GetState()
-        cons_print('%s: Currently in %s.' %
+        print('%s: Currently in %s.' %
            (self.name, omx_state_names[self.c_app_data.current_state]))
 
 #===============================================================================
