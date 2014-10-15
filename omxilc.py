@@ -244,13 +244,6 @@ def _defEventHandler(cv_handle, cp_app_data, event, data1, data2, cp_event_data)
         # seems to be to wait long enough before setting a flag and returning
 		# from this handler.
         if not _verbose:
-#            timer = 0
-#            ec, c_port_def = self.GetPortDefinition(data1)
-#            while (not c_port_def.bPopulated and (timer < self.timeout)):
-#                time.sleep(0.001)
-#                timer += 1
-#                ec, c_port_def = self.GetPortDefinition(data1)
-
             time.sleep(0.01)
 
         c_comp.port_changed = data1
