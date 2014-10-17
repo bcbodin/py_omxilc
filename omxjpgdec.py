@@ -342,17 +342,6 @@ class JPEGDecoder(object):
         return e
 
     #---------------------------------------------------------------------------
-    def SetupTunnel(self):
-        """
-        Set up tunnel between decoder output and resizer input.
-
-        Return value:
-            <int>       Error code: 0 for success, not 0 for failure.
-        """
-
-        return e
-
-    #---------------------------------------------------------------------------
     def SetupPipe(self):
         """
         Once the settings of the decoder output port change after the very first
