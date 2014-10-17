@@ -1,6 +1,6 @@
 """
 Module Name: omxilc.py
-Version: 1.1 (2014-10-14)
+Version: 1.1 (2014-10-16)
 Python Version: 2.7.3
 
 This module defines classes for writing OMX IL client applications.
@@ -129,7 +129,8 @@ COMPONENT_CBDT._fields_ = [
         ('port_changed', ctypes.c_int),     # Port index with settings changed.
         ('port_eos', ctypes.c_int),         # Port index that detected end of stream.
         ('port_emptied', ctypes.c_int),     # Port index with buffer emptied.
-        ('port_filled', ctypes.c_int)]      # Port index with buffer filled.
+        ('port_filled', ctypes.c_int),      # Port index with buffer filled.
+        ('event_error', ctypes.c_uint)]     # Error code from event handler.
 
 #-------------------------------------------------------------------------------
 # C structure of private data for a buffer header.
@@ -193,7 +194,6 @@ def _defEventHandler(cv_handle, cp_app_data, event, data1, data2, cp_event_data)
 
     cp_comp = ctypes.cast(cp_app_data, pCOMPONENT_CBDT)
     c_comp = cp_comp[0]
-    global _verbose
 
     if event == OMX_EventCmdComplete:
         c_comp.cmd_complete = 1
@@ -227,25 +227,17 @@ def _defEventHandler(cv_handle, cp_app_data, event, data1, data2, cp_event_data)
                 (c_comp.name, data2))
 
     elif event == OMX_EventError:
-        print_error(data1, c_comp.name + ' event', ' ' + c_comp.method)
+        c_comp.event_error = data1
+        if data1 == OMX_ErrorSameState:
+            cons_print('%s event. %s failed: OMX_ErrorSameState' %
+                (c_comp.name, c_comp.method))
+        else:
+            print_error(data1, c_comp.name + ' event', ' ' + c_comp.method)
 
     elif event == OMX_EventMark:
         cons_print('%s event: Marked buffer received.' % c_comp.name)
 
     elif event == OMX_EventPortSettingsChanged:
-        # When _verbose is off, and GetBufferSupplier is called following a
-        # port settings changed event, a PortUnpopulated error event occurs
-        # even though the called method does not return any error.
-        # The error event does not occur when _verbose if on because the
-        # printout in this event handler is slow enough to put sufficient
-        # delay between the event occurence and the method call.
-        # Checking nPopulated flag in the port definition structure does not
-        # help because it is true regardless of the error. The best solution
-        # seems to be to wait long enough before setting a flag and returning
-        # from this handler.
-        if not _verbose:
-            time.sleep(0.01)
-
         c_comp.port_changed = data1
         cons_print('%s event: Port %d settings changed.' % (c_comp.name, data1))
 
@@ -335,8 +327,6 @@ class omxComponent(object):
         # callbacks for identifying source and updating its data.
         self.c_app_data = COMPONENT_CBDT()
         self.c_app_data.name = self.name[:31]
-
-        #-----------------------------------------------------------------------
 
         # Create a C structure of default callback functions.
         self.c_callbacks = OMX_CALLBACKTYPE()
@@ -571,6 +561,7 @@ class omxComponent(object):
             time.sleep(0.001)
             timer += 1
             e, c_port_def = self.GetPortDefinition(port_index)
+
         if c_port_def.bEnabled:
             cons_print('%s: Port %d not disabled after %d ms.' %
                 (self.name, port_index, timeout))
@@ -600,6 +591,7 @@ class omxComponent(object):
             time.sleep(0.001)
             timer += 1
             e, c_port_def = self.GetPortDefinition(port_index)
+
         if not c_port_def.bEnabled:
             cons_print('%s: Port %d not enabled after %d ms.' %
                 (self.name, port_index, timeout))
@@ -611,17 +603,29 @@ class omxComponent(object):
 
         Parameters:
             port_index      <int>       Index of port to wait for event.
+
+        Return value:
+            <int>       Error code.
         """
 
         timer = 0
         while ((self.c_app_data.port_changed != port_index) and
                 (timer < self.timeout)):
+            # Quit waiting on StreamCorrupt error event.
+            e = self.c_app_data.event_error
+            if e != OMX_ErrorNone:
+                self.c_app_data.event_error = OMX_ErrorNone
+                if e == OMX_ErrorStreamCorrupt:
+                    return e
             time.sleep(0.001)
             timer += 1
 
-        if self.c_app_data.port_changed != port_index:
-            cons_print('%s: No settings changed event for port %d after %d ms.'
-                % (self.name, port_index, self.timeout))
+        if self.c_app_data.port_changed == port_index:
+            return 0
+
+        cons_print('%s: No settings changed event for port %d after %d ms.'
+            % (self.name, port_index, self.timeout))
+        return 1
 
     #---------------------------------------------------------------------------
     def ResetCallbackPortFlags(self):
@@ -637,6 +641,7 @@ class omxComponent(object):
         self.c_app_data.port_eos = 0
         self.c_app_data.port_emptied = 0
         self.c_app_data.port_filled = 0
+        self.c_app_data.event_error = OMX_ErrorNone
 
     #---------------------------------------------------------------------------
     def PlaceOutTunnel(self, out_port, sink_component, sink_port):
