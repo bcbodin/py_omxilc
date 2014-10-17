@@ -1,6 +1,6 @@
 """
 Module Name: omxilc.py
-Version: 1.1 (2014-10-16)
+Version: 1.1 (2014-10-17)
 Python Version: 2.7.3
 
 This module defines classes for writing OMX IL client applications.
@@ -188,6 +188,12 @@ if 'print_error' not in dir():
     def print_error(error, comp_name='', method=''):
         pass
 
+if _verbose:
+    cons_print_error = print_error
+else:
+    def cons_print_error(error, comp_name='', method=''):
+        pass
+
 #-------------------------------------------------------------------------------
 # Default EventHandler callback for components.
 def _defEventHandler(cv_handle, cp_app_data, event, data1, data2, cp_event_data):
@@ -229,8 +235,7 @@ def _defEventHandler(cv_handle, cp_app_data, event, data1, data2, cp_event_data)
     elif event == OMX_EventError:
         c_comp.event_error = data1
         if data1 == OMX_ErrorSameState:
-            cons_print('%s event. %s failed: OMX_ErrorSameState' %
-                (c_comp.name, c_comp.method))
+            cons_print_error(data1, c_comp.name + ' event', ' ' + c_comp.method)
         else:
             print_error(data1, c_comp.name + ' event', ' ' + c_comp.method)
 
@@ -625,6 +630,58 @@ class omxComponent(object):
 
         cons_print('%s: No settings changed event for port %d after %d ms.'
             % (self.name, port_index, self.timeout))
+        return 1
+
+    #---------------------------------------------------------------------------
+    def WaitForBufferEmpty(self, port_index, timeout):
+        """
+        Wait until a port buffer is empty.
+
+        Parameters:
+            port_index      <int>       Index of port to wait.
+            timeout         <int>       Time-out in ms.
+
+        Return value:
+            <int>       Error code.
+        """
+
+        timer = 0
+        while ((self.c_app_data.port_emptied != port_index) and
+                (timer < timeout)):
+            time.sleep(0.001)
+            timer += 1
+
+        if self.c_app_data.port_emptied == port_index:
+            return 0
+
+        cons_print('%s: Port %d buffer not empty after %d ms.' %
+            (self.name, port_index, timeout))
+        return 1
+
+    #---------------------------------------------------------------------------
+    def WaitForBufferFilled(self, port_index, timeout):
+        """
+        Wait until a port buffer is filled.
+
+        Parameters:
+            port_index      <int>       Index of port to wait.
+            timeout         <int>       Time-out in ms.
+
+        Return value:
+            <int>       Error code.
+        """
+
+        timer = 0
+        while ((self.c_app_data.port_filled != port_index) and
+                (timer < timeout)):
+            time.sleep(0.001)
+            timer += 1
+
+        if self.c_app_data.port_filled == port_index:
+            return 0
+
+        cons_print('%s: Port %d buffer not filled after %d ms.' %
+            (self.name, port_index, timeout))
         return 1
 
     #---------------------------------------------------------------------------
