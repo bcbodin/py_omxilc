@@ -357,7 +357,7 @@ class JPEGDecoder(object):
         """
         Once the settings of the decoder output port change after the very first
         decoder input buffer load is converted, complete the set up for the JPEG
-		decoder.
+	decoder.
 
         Return value:
             <int>       Error code: 0 for success, not 0 for failure.
@@ -600,7 +600,7 @@ class JPEGDecoder(object):
         Handler for decoder output port settings changed event.
         If the JPEG decoder set up has not been fully complete, complete it.
         Otherwise, disable the decoder-resizer tunnel, copy the decoder output
-		port settings to the resizer input port, and re-enable the tunnel.
+	port settings to the resizer input port, and re-enable the tunnel.
 
         Return value:
             <int>       Error code: 0 for success, not 0 for failure.
