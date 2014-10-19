@@ -1,6 +1,6 @@
 """
 Module Name: omxilc.py
-Version: 1.1 (2014-10-17)
+Version: 1.2 (2014-10-19)
 Python Version: 2.7.3
 
 This module defines classes for writing OMX IL client applications.
@@ -312,7 +312,7 @@ def _defFillBufferDoneError(cv_handle, cp_app_data, cp_buffer):
 class omxComponent(object):
     """OpenMAX Integration Layer Component Class"""
 
-    def __init__(self, name, flags=ILCLIENT_FLAGS_NONE, timeout=0):
+    def __init__(self, name, flags=ILCLIENT_FLAGS_NONE, timeout=250):
         """
         Parameters:
             name        <str>       Name of component to create.
@@ -464,17 +464,35 @@ class omxComponent(object):
     def Close(self):
         """
         Close the component.
-        The IL client application is responsible for bringing the component
-        back to state Loaded before calling this method.
 
         Return value:
             <int>       Error code.
         """
 
-        e = OMX_FreeHandle(self.cv_handle)
-        print_error(e, self.name, 'Close')
+        e = 0
 
-        if e == OMX_ErrorNone:
+        # Disable input buffers.
+        if self.c_app_data.num_in_buf_hdr > 0:
+            c_buf_hdr = self.c_app_data.pp_in_buf_hdr[0][0]
+            e |= self.DisableBuffers(c_buf_hdr.nInputPortIndex)
+
+        # Disable output buffers.
+        if self.c_app_data.num_out_buf_hdr > 0:
+            c_buf_hdr = self.c_app_data.pp_out_buf_hdr[0][0]
+            e |= self.DisableBuffers(c_buf_hdr.nOutputPortIndex)
+
+        # Move component to state Loaded.
+        if self.c_app_data.current_state != OMX_StateInvalid:
+            if self.c_app_data.current_state != OMX_StateLoaded:
+                if self.c_app_data.current_state != OMX_StateIdle:
+                    e |= self.ChangeState(OMX_StateIdle, self.timeout)
+                e |= self.ChangeState(OMX_StateLoaded, self.timeout)
+
+        # Release component handle.
+        ec = OMX_FreeHandle(self.cv_handle)
+        e |= ec
+        print_error(ec, self.name, 'Close')
+        if ec == OMX_ErrorNone:
             self.cv_handle = OMX_HANDLETYPE()   # void pointer
             self.c_handle = ctypes.cast(self.cv_handle, pOMX_COMPONENTTYPE)
             self.c_app_data.handle = self.cv_handle
@@ -503,119 +521,155 @@ class omxComponent(object):
                 self.DisablePort(self.port_indices[key], timeout)
 
     #---------------------------------------------------------------------------
-    def WaitForState(self, state):
+    def WaitForState(self, state, timeout=0):
         """
         Wait until the component is in a specific state.
 
         Parameters:
             state           <int>       State to wait for.
+            timeout         <int>       Time-out in ms (optional).
+
+        Return value:
+            <int>       Error code.
         """
 
+        if timeout == 0:
+            timeout = self.timeout
         timer = 0
         while ((self.c_app_data.current_state != state) and
-                (timer < self.timeout)):
+                (timer < timeout)):
             time.sleep(0.001)
             timer += 1
 
-        if self.c_app_data.current_state != state:
-            cons_print('%s: State %s not reached after %d ms.' %
-                (self.name, omx_state_names[state], self.timeout))
+        if self.c_app_data.current_state == state:
+            return 0
+
+        cons_print('%s: State %s not reached after %d ms.' %
+            (self.name, omx_state_names[state], self.timeout))
+        return 1
 
     #---------------------------------------------------------------------------
-    def WaitForPortFlushed(self, port_index, timeout):
+    def WaitForPortFlushed(self, port_index, timeout=0):
         """
         Wait until a port is flushed.
 
         Parameters:
-            port_index      <int>       Index of port to wait.
-            timeout         <int>       Time-out in ms.
+            port_index      <int>       Index of port to wait for event.
+            timeout         <int>       Time-out in ms (optional).
+
+        Return value:
+            <int>       Error code.
         """
 
+        if timeout == 0:
+            timeout = self.timeout
         timer = 0
         while ((self.c_app_data.port_flushed != port_index) and
                 (timer < timeout)):
             time.sleep(0.001)
             timer += 1
 
-        if self.c_app_data.port_flushed != port_index:
-            cons_print('%s: Port %d not flushed after %d ms.' %
-                (self.name, port_index, timeout))
+        if self.c_app_data.port_flushed == port_index:
+            return 0
+
+        cons_print('%s: Port %d not flushed after %d ms.' %
+            (self.name, port_index, timeout))
+        return 1
 
     #---------------------------------------------------------------------------
-    def WaitForPortDisabled(self, port_index, timeout):
+    def WaitForPortDisabled(self, port_index, timeout=0):
         """
         Wait until a port is disabled.
 
         Parameters:
             port_index      <int>       Index of port to wait.
-            timeout         <int>       Time-out in ms.
+            timeout         <int>       Time-out in ms (optional).
+
+        Return value:
+            <int>       Error code.
         """
 
-#        timer = 0
+        if timeout == 0:
+            timeout = self.timeout
+        timer = 0
+
 #        while ((self.c_app_data.port_disabled != port_index) and
 #                (timer < timeout)):
 #            time.sleep(0.001)
 #            timer += 1
-#        if self.c_app_data.port_disabled != port_index:
-#            cons_print('%s: Port %d not disabled after %d ms.' %
-#                (self.name, port_index, timeout))
+#        if self.c_app_data.port_disabled == port_index:
+#            return 0
+#        e = 1
 
-        timer = 0
         e, c_port_def = self.GetPortDefinition(port_index)
         while (c_port_def.bEnabled and (timer < timeout)):
             time.sleep(0.001)
             timer += 1
             e, c_port_def = self.GetPortDefinition(port_index)
 
-        if c_port_def.bEnabled:
-            cons_print('%s: Port %d not disabled after %d ms.' %
-                (self.name, port_index, timeout))
+        if not c_port_def.bEnabled and (e == OMX_ErrorNone):
+            return 0
+
+        cons_print('%s: Port %d not disabled after %d ms.' %
+            (self.name, port_index, timeout))
+        return e
 
     #---------------------------------------------------------------------------
-    def WaitForPortEnabled(self, port_index, timeout):
+    def WaitForPortEnabled(self, port_index, timeout=0):
         """
         Wait until a port is enabled.
 
         Parameters:
             port_index      <int>       Index of port to wait.
-            timeout         <int>       Time-out in ms.
+            timeout         <int>       Time-out in ms (optional).
+
+        Return value:
+            <int>       Error code.
         """
 
-#        timer = 0
+        if timeout == 0:
+            timeout = self.timeout
+        timer = 0
+
 #        while ((self.c_app_data.port_enabled != port_index) and
 #                (timer < timeout)):
 #            time.sleep(0.001)
 #            timer += 1
-#        if self.c_app_data.port_enabled != port_index:
-#            cons_print('%s: Port %d not enabled after %d ms.' %
-#                (self.name, port_index, timeout))
+#        if self.c_app_data.port_enabled == port_index:
+#            return 0
+#        e = 1
 
-        timer = 0
         e, c_port_def = self.GetPortDefinition(port_index)
         while (not c_port_def.bEnabled and (timer < timeout)):
             time.sleep(0.001)
             timer += 1
             e, c_port_def = self.GetPortDefinition(port_index)
 
-        if not c_port_def.bEnabled:
-            cons_print('%s: Port %d not enabled after %d ms.' %
-                (self.name, port_index, timeout))
+        if c_port_def.bEnabled and (e == OMX_ErrorNone):
+            return 0
+
+        cons_print('%s: Port %d not enabled after %d ms.' %
+            (self.name, port_index, timeout))
+        return e
 
     #---------------------------------------------------------------------------
-    def WaitForPortSettingsChanged(self, port_index):
+    def WaitForPortSettingsChanged(self, port_index, timeout=0):
         """
         Wait for a settings changed event for a port.
 
         Parameters:
             port_index      <int>       Index of port to wait for event.
+            timeout         <int>       Time-out in ms (optional).
 
         Return value:
             <int>       Error code.
         """
 
+        if timeout == 0:
+            timeout = self.timeout
         timer = 0
         while ((self.c_app_data.port_changed != port_index) and
-                (timer < self.timeout)):
+                (timer < timeout)):
             # Quit waiting on StreamCorrupt error event.
             e = self.c_app_data.event_error
             if e != OMX_ErrorNone:
@@ -633,18 +687,20 @@ class omxComponent(object):
         return 1
 
     #---------------------------------------------------------------------------
-    def WaitForBufferEmpty(self, port_index, timeout):
+    def WaitForBufferEmpty(self, port_index, timeout=0):
         """
-        Wait until a port buffer is empty.
+        Wait until an input port buffer is empty.
 
         Parameters:
-            port_index      <int>       Index of port to wait.
-            timeout         <int>       Time-out in ms.
+            port_index      <int>       Index of port to wait for event.
+            timeout         <int>       Time-out in ms (optional).
 
         Return value:
             <int>       Error code.
         """
 
+        if timeout == 0:
+            timeout = self.timeout
         timer = 0
         while ((self.c_app_data.port_emptied != port_index) and
                 (timer < timeout)):
@@ -659,18 +715,20 @@ class omxComponent(object):
         return 1
 
     #---------------------------------------------------------------------------
-    def WaitForBufferFilled(self, port_index, timeout):
+    def WaitForBufferFilled(self, port_index, timeout=0):
         """
-        Wait until a port buffer is filled.
+        Wait until an output port buffer is filled.
 
         Parameters:
-            port_index      <int>       Index of port to wait.
+            port_index      <int>       Index of port to wait for event.
             timeout         <int>       Time-out in ms.
 
         Return value:
             <int>       Error code.
         """
 
+        if timeout == 0:
+            timeout = self.timeout
         timer = 0
         while ((self.c_app_data.port_filled != port_index) and
                 (timer < timeout)):
@@ -721,16 +779,16 @@ class omxComponent(object):
 
         if e == OMX_ErrorNone:
             self.c_app_data.out_tunnel_port = out_port
-            self.c_app_data.sink = ctypes.pointer(sink_component.c_app_data)
             sink_component.c_app_data.in_tunnel_port = sink_port
             sink_component.c_app_data.source = ctypes.pointer(self.c_app_data)
+            self.c_app_data.sink = ctypes.pointer(sink_component.c_app_data)
             cons_print('%s: Tunnel placed from port %d to port %d of %s.' %
                 (self.name, out_port, sink_port, sink_component.name))
 
         return e
 
     #---------------------------------------------------------------------------
-    def RemoveOutTunnel(self):
+    def RemoveOutTunnel(self, sink_component):
         """
         Remove the output tunnel to a sink component.
 
@@ -738,20 +796,152 @@ class omxComponent(object):
             <int>       Error code.
         """
 
+        # Return if tunnel was not placed.
         if not self.c_app_data.sink:
             return OMX_ErrorNone
 
         sink = self.c_app_data.sink[0]
+        out_port = self.c_app_data.out_tunnel_port
+        sink_port = sink.in_tunnel_port
 
-        e = OMX_SetupTunnel(self.cv_handle, self.c_app_data.out_tunnel_port,
-                OMX_HANDLETYPE(), sink.in_tunnel_port)
-        e |= OMX_SetupTunnel(OMX_HANDLETYPE(), self.c_app_data.out_tunnel_port,
-                sink.handle, sink.in_tunnel_port)
+        e, c_out_def = self.GetPortDefinition(out_port)
+        ec, c_sink_def = sink_component.GetPortDefinition(sink_port)
+        e |= ec
+
+        # Flush and disable tunnel if it has been enabled.
+        if (e == OMX_ErrorNone) and c_out_def.bEnabled and c_sink_def.bEnabled:
+            e |= self.FlushOutTunnel(sink_component)
+            e |= self.DisableOutTunnel(sink_component)
+
+        # Remove tunnel.
+        e = OMX_SetupTunnel(self.cv_handle, out_port, OMX_HANDLETYPE(), 0)
+        e |= OMX_SetupTunnel(OMX_HANDLETYPE(), 0, sink.handle, sink_port)
         print_error(e, self.name, 'OMX_SetupTunnel')
         if e == OMX_ErrorNone:
             cons_print('%s: Tunnel from port %d to port %d of %s removed.' %
-                (self.name, self.c_app_data.out_tunnel_port,
-                 sink.in_tunnel_port, sink.name))
+                (self.name, out_port, sink_port, sink.name))
+            self.c_app_data.out_tunnel_port = 0
+            sink.in_tunnel_port = 0
+            sink.source = pCOMPONENT_CBDT()
+            self.c_app_data.sink = pCOMPONENT_CBDT()
+
+        return e
+
+    #---------------------------------------------------------------------------
+    def DisableOutTunnel(self, sink_component,
+                         buf_supplier=OMX_BufferSupplyInput, timeout=0):
+        """
+        Disable the output tunnel by disabling its associated ports.
+
+        Parameters:
+            sink_component  <object>    Sink component.
+            buf_supplier    <int>       Buffer supplier: OMX_BufferSupplyInput
+                                        or OMX_BufferSupplyOutput (optional).
+            timeout         <int>       Time-out in ms (optional).
+
+        Return value:
+            <int>       Error code.
+        """
+
+        # Return if tunnel was not placed.
+        out_port = self.c_app_data.out_tunnel_port
+        sink_port = sink_component.c_app_data.in_tunnel_port
+        if (out_port == 0) or (sink_port == 0):
+            return OMX_ErrorNone
+
+        # Get buffer supplier for output port.
+        if buf_supplier == OMX_BufferSupplyUnspecified:
+            # Get buffer supplier for output port.
+            ec, buf_supplier = self.GetBufferSupplier(out_port)
+            if ec != OMX_ErrorNone:
+                cons_print('%s: Failed to get port %d buffer supplier.' %
+                    (self.name, out_port))
+                buf_supplier = OMX_BufferSupplyInput
+
+        if timeout == 0:
+            timeout = self.timeout
+
+        # Disable supplier port first and non-supplier port second.
+        if buf_supplier == OMX_BufferSupplyInput:
+            e = sink_component.DisablePort(sink_port)
+            e |= self.DisablePort(out_port, timeout)
+            sink_component.WaitForPortDisabled(sink_port, timeout)
+        else:
+            e = self.DisablePort(out_port)
+            e |= sink_component.DisablePort(sink_port, timeout)
+            self.WaitForPortDisabled(out_port, timeout)
+
+        return e
+
+    #---------------------------------------------------------------------------
+    def EnableOutTunnel(self, sink_component,
+                        buf_supplier=OMX_BufferSupplyInput, timeout=0):
+        """
+        Enable the output tunnel by disabling its associated ports.
+
+        Parameters:
+            sink_component  <object>    Sink component.
+            buf_supplier    <int>       Buffer supplier: OMX_BufferSupplyInput
+                                        or OMX_BufferSupplyOutput (optional).
+            timeout         <int>       Time-out in ms (optional).
+
+        Return value:
+            <int>       Error code.
+        """
+
+        # Return if tunnel was not placed.
+        out_port = self.c_app_data.out_tunnel_port
+        sink_port = sink_component.c_app_data.in_tunnel_port
+        if (out_port == 0) or (sink_port == 0):
+            return OMX_ErrorNone
+
+        # Get buffer supplier for output port.
+        if buf_supplier == OMX_BufferSupplyUnspecified:
+            # Get buffer supplier for output port.
+            ec, buf_supplier = self.GetBufferSupplier(out_port)
+            if ec != OMX_ErrorNone:
+                cons_print('%s: Failed to get port %d buffer supplier.' %
+                    (self.name, out_port))
+                buf_supplier = OMX_BufferSupplyInput
+
+        if timeout == 0:
+            timeout = self.timeout
+
+        # Enable non-supplier port first and supplier port second.
+        if buf_supplier == OMX_BufferSupplyInput:
+            e = self.EnablePort(out_port)
+            e |= sink_component.EnablePort(sink_port, timeout)
+            self.WaitForPortEnabled(out_port, timeout)
+        else:
+            e = sink_component.EnablePort(sink_port)
+            e |= self.EnablePort(out_port, timeout)
+            sink_component.WaitForPortEnabled(sink_port, timeout)
+
+        return e
+
+    #---------------------------------------------------------------------------
+    def FlushOutTunnel(self, sink_component, timeout=0):
+        """
+        Flush the output tunnel by flushing its associated ports.
+
+        Parameters:
+            sink_component  <object>    Sink component.
+            timeout         <int>       Time-out in ms (optional).
+
+        Return value:
+            <int>       Error code.
+        """
+
+        if timeout == 0:
+            timeout = self.timeout
+
+        e = 0
+        out_port = self.c_app_data.out_tunnel_port
+        if out_port > 0:
+            e |= self.FlushPort(out_port, timeout)
+        sink_port = sink_component.c_app_data.in_tunnel_port
+        if sink_port > 0:
+            e |= sink_component.FlushPort(sink_port, timeout)
 
         return e
 
@@ -872,7 +1062,7 @@ class omxComponent(object):
         Request the component to allocate all required buffers for a port.
 
         Parameters:
-            port_index      <int>       Index of port to use buffers.
+            port_index      <int>       Index of port to allocate buffers.
             buffer_size     <int>       Size of a buffer in bytes.
 
         Return values:
@@ -965,6 +1155,76 @@ class omxComponent(object):
 
         return (e,
                 cpp_buf)
+
+    #---------------------------------------------------------------------------
+    def EnableBuffers(self, port_index, buffer_size):
+        """
+        Enable buffers for a port. First, request the component to enable the
+        port. Second, request the component to allocate all required buffers for
+        the port. Finally, wait for the port to be enabled.
+
+        Parameters:
+            port_index      <int>       Index of port to allocate buffers.
+            buffer_size     <int>       Size of a buffer in bytes.
+
+        Return values:
+            <int>       Error code.
+            <c_pointer> Array of pointers to c_char buffers.
+        """
+
+        self.EnablePort(port_index)
+        e, cpp_buf = self.AllocateAllBuffers(port_index, buffer_size)
+        self.WaitForPortEnabled(port_index)
+
+        return (e,
+                cpp_buf)
+
+    #---------------------------------------------------------------------------
+    def DisableBuffers(self, port_index):
+        """
+        Disable buffers for a port. First, request the component to disable the
+        port. Second, request the component to free all buffers allocated for
+        the port. Finally, wait for the port to be disabled.
+
+        Parameters:
+            port_index      <int>       Index of port to allocate buffers.
+
+        Return value:
+            <int>       Error code.
+        """
+
+        num_buf_hdr = 0
+
+        if self.c_app_data.num_in_buf_hdr > 0:
+            cpp_buf_hdr = self.c_app_data.pp_in_buf_hdr
+            if port_index == cpp_buf_hdr[0][0].nInputPortIndex:
+                num_buf_hdr = self.c_app_data.num_in_buf_hdr
+                port_dir = 0
+
+        if (num_buf_hdr <= 0) and (self.c_app_data.num_out_buf_hdr > 0):
+            cpp_buf_hdr = self.c_app_data.pp_out_buf_hdr
+            if port_index == cpp_buf_hdr[0][0].nOutputPortIndex:
+                num_buf_hdr = self.c_app_data.num_out_buf_hdr
+                port_dir = 1
+
+        if num_buf_hdr <= 0:
+            return OMX_ErrorNone
+
+        self.DisablePort(port_index)
+
+        # There should be a FillBufferDone callback for each output buffer.
+
+        e = 0
+        for n in range(num_buf_hdr):
+            e |= self.FreeBuffer(port_index, cpp_buf_hdr[n])
+        self.WaitForPortDisabled(port_index)
+
+        if port_dir == 0:
+            self.c_app_data.num_in_buf_hdr = 0
+        else:
+            self.c_app_data.num_out_buf_hdr = 0
+
+        return e
 
     #---------------------------------------------------------------------------
     # Component Level Methods
@@ -1481,12 +1741,15 @@ class omxComponent(object):
     # Send Commands
     #---------------------------------------------------------------------------
 
-    def ChangeState(self, state):
+    def ChangeState(self, state, timeout=0):
         """
         Request the component to transition into a new state.
 
         Parameters:
             state           <int>       new state for component
+            timeout         <int>       Time-out in ms (optional). If > 0, this
+                                        method will wait until the new state
+                                        or the time-out is reached.
 
         Return value:
             <int>       Error code.
@@ -1497,17 +1760,21 @@ class omxComponent(object):
         cons_print('%s: Going to %s...' %
                    (self.name, omx_state_names[state]))
         e = self.SendCommand(OMX_CommandStateSet, state)
+        if (e == OMX_ErrorNone) and (timeout > 0):
+            e = self.WaitForState(state, timeout)
 
         return e
 
     #---------------------------------------------------------------------------
-    def FlushPort(self, port_index):
+    def FlushPort(self, port_index, timeout=0):
         """
         Flush a specific port or all ports.
 
         Parameters:
-            port_index      <int>       Index of port to flush. If this is
-                                        OMX_ALL, all ports will be flushed.
+            port_index      <int>       Index of port to flush.
+            timeout         <int>       Time-out in ms (optional). If > 0, this
+                                        method will wait until the port is
+                                        flushed or the time-out is reached.
 
         Return value:
             <int>       Error code.
@@ -1518,6 +1785,8 @@ class omxComponent(object):
 
 #        cons_print('%s: Flushing port %d...' % (self.name, port_index))
         e = self.SendCommand(OMX_CommandFlush, port_index)
+        if (e == OMX_ErrorNone) and (timeout > 0):
+            e = self.WaitForPortFlushed(port_index, timeout)
 
         return e
 
@@ -1527,8 +1796,7 @@ class omxComponent(object):
         Disable a specific port or all ports.
 
         Parameters:
-            port_index      <int>       Index of port to disable. If this is
-                                        OMX_ALL, all ports will be disabled.
+            port_index      <int>       Index of port to disable.
             timeout         <int>       Time-out in ms (optional). If > 0, this
                                         method will wait until the port is
                                         disabled or the time-out is reached.
@@ -1553,8 +1821,7 @@ class omxComponent(object):
         Enable a specific port or all ports.
 
         Parameters:
-            port_index      <int>       Index of port to enable. If this is
-                                        OMX_ALL, all ports will be enabled.
+            port_index      <int>       Index of port to enable.
             timeout         <int>       Time-out in ms (optional). If > 0, this
                                         method will wait until the port is
                                         enabled or the time-out is reached.
