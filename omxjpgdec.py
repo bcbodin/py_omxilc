@@ -1,6 +1,6 @@
 """
 Module Name: omxjpgdec.py
-Version: 1.2 (2014-10-17)
+Version: 1.2 (2014-10-19)
 Python Version: 2.7.3
 Platform: Raspberry Pi
 
@@ -117,10 +117,7 @@ class JPEGDecoder(object):
             return
 
         # Set up JPEG decoder.
-        if not self.alt_setup:
-            self.Setup()
-        else:
-            self.AltSetup()
+        self.Setup()
 
     #---------------------------------------------------------------------------
     def Close(self):
@@ -133,80 +130,8 @@ class JPEGDecoder(object):
 
         e = 0
 
-        # Set up was complete.
-        if self.setup_complete:
-
-            # Flush decoder-resizer tunnel.
-            e |= self.decoder.FlushPort(self.decoder_out_port)
-            self.decoder.WaitForPortFlushed(self.decoder_out_port, self.timeout)
-            e |= self.resizer.FlushPort(self.resizer_in_port)
-            self.resizer.WaitForPortFlushed(self.resizer_in_port, self.timeout)
-
-            # Get buffer supplier for decoder output port.
-            ec, bs = self.decoder.GetBufferSupplier(self.decoder_out_port)
-            if ec != OMX_ErrorNone:
-                print '%s: Failed to get buffer supplier for decoder output.'
-                bs = OMX_BufferSupplyInput
-
-            # Disable resizer input and decoder output.
-            # Supplier port is disabled first and non-supplier port second.
-            if bs == OMX_BufferSupplyInput: # Supplier is resizer input port.
-                e |= self.resizer.DisablePort(self.resizer_in_port)
-                e |= self.decoder.DisablePort(self.decoder_out_port, self.timeout)
-                self.resizer.WaitForPortDisabled(self.resizer_in_port, self.timeout)
-            else:
-                e |= self.decoder.DisablePort(self.decoder_out_port)
-                e |= self.resizer.DisablePort(self.resizer_in_port, self.timeout)
-                self.decoder.WaitForPortDisabled(self.decoder_out_port, self.timeout)
-
-            # Remove tunnel between decoder output and resizer input.
-            e |= self.decoder.RemoveOutTunnel()
-
-            # Request resizer to change state to Idle.
-            e |= self.resizer.ChangeState(OMX_StateIdle)
-
-            # Resizer should generate a FillBufferDone callback
-            # for each output port buffer.
-
-        # Request decoder to change state to Idle.
-        e |= self.decoder.ChangeState(OMX_StateIdle)
-        self.decoder.WaitForState(OMX_StateIdle)
-
-        # Disable decoder input port.
-        e |= self.decoder.DisablePort(self.decoder_in_port)
-
-        # Free decoder input port buffers.
-        for n in range(self.num_in_buf):
-            cp_in_buf_hdr = self.decoder.c_app_data.pp_in_buf_hdr[n]
-            e |= self.decoder.FreeBuffer(self.decoder_in_port, cp_in_buf_hdr)
-
-        # Wait until decoder port is disabled.
-        self.decoder.WaitForPortDisabled(self.decoder_in_port, self.timeout)
-
-        # Request decoder to change state to Loaded.
-        e |= self.decoder.ChangeState(OMX_StateLoaded)
-        self.decoder.WaitForState(OMX_StateLoaded)
-
-        # Not alternate set up or set up was complete.
-        if not self.alt_setup or self.set_complete:
-
-            # Disable resizer output port.
-            e |= self.resizer.DisablePort(self.resizer_out_port)
-
-            # Wait until resizer is in state Idle.
-            self.resizer.WaitForState(OMX_StateIdle)
-
-            # Free resizer output port buffers.
-            for n in range(self.num_out_buf):
-                cp_out_buf_hdr = self.resizer.c_app_data.pp_out_buf_hdr[n]
-                e |= self.resizer.FreeBuffer(self.resizer_out_port, cp_out_buf_hdr)
-
-            # Wait until resizer output port is disabled.
-            self.resizer.WaitForPortDisabled(self.resizer_out_port, self.timeout)
-
-            # Request resizer to change state to Loaded.
-            e |= self.resizer.ChangeState(OMX_StateLoaded)
-            self.resizer.WaitForState(OMX_StateLoaded)
+        # Remove decoder-resizer tunnel if it was placed.
+        e |= self.decoder.RemoveOutTunnel(self.resizer)
 
         # Close decoder and resizer.
         e |= self.decoder.Close()
@@ -219,54 +144,38 @@ class JPEGDecoder(object):
         """
         Set up the JPEG decoder.
 
+        The alternate set up sequence is used by Matt Ownby and Anthong Sale
+        in the hello_jpeg demo program.
+
         Return value:
             <int>       Error code: 0 for success, not 0 for failure.
-                            1 = Decoder not in state Loaded.
-                            2 = Resizer not in state Loaded.
         """
 
-        # Ensure that both components are in state Loaded.
+        e = 0
+
+        # Ensure that decoder and resizer are in state Loaded.
         if self.decoder.c_app_data.current_state != OMX_StateLoaded:
-            print ('%s.Setup: Decoder not in state Loaded.' % self.name)
-            return 1
+            if self.decoder.c_app_data.current_state != OMX_StateIdle:
+                e |= self.decoder.ChangeState(OMX_StateIdle, self.timeout)
+            e |= self.decoder.ChangeState(OMX_StateLoaded, self.timeout)
+
         if self.resizer.c_app_data.current_state != OMX_StateLoaded:
-            print ('%s.Setup: Resizer not in state Loaded.' % self.name)
-            return 2
+            if self.resizer.c_app_data.current != OMX_StateIdle:
+                e |= self.resizer.ChangeState(OMX_StateIdle, self.timeout)
+            e |= self.resizer.ChangeState(OMX_StateLoaded, self.timeout)
 
         # Set format of decoder input port.
-        e = self.decoder.SetImagePortFormat(
+        e |= self.decoder.SetImagePortFormat(
                 self.decoder_in_port,
                 OMX_IMAGE_CodingJPEG,
                 OMX_COLOR_FormatUnused)
 
-        # Modify settings of resizer output port.
-        e |= self.resizerSetOutputDefinition(
-                coding=OMX_IMAGE_CodingUnused,
-                color=self.out_format,
-                width=self.out_width,
-                height=self.out_height)
+        # Move decoder to state Idle and state Executing.
+        e |= self.decoder.ChangeState(OMX_StateIdle, self.timeout)
+        e |= self.decoder.ChangeState(OMX_StateExecuting, self.timeout)
 
-        # Enable decoder input and resizer output.
-        e |= self.decoder.EnablePort(self.decoder_in_port, self.timeout)
-        e |= self.resizer.EnablePort(self.resizer_out_port, self.timeout)
-
-        # Request resizer and decoder to change state to Idle.
-        e |= self.resizer.ChangeState(OMX_StateIdle)
-        e |= self.decoder.ChangeState(OMX_StateIdle)
-
-        # Allocate buffers to resizer output port.
-        ec, self.cpp_out_buf = self.resizer.AllocateAllBuffers(
-                self.resizer_out_port,
-                self.out_buf_size)
-        e |= ec
-        self.num_out_buf = len(self.cpp_out_buf)
-        if ec == OMX_ErrorNone:
-            sz = len(self.cpp_out_buf[0][0])
-            if sz != self.out_buf_size:
-                self.out_buf_size = sz
-
-        # Allocate buffers to decoder input port.
-        ec, self.cpp_in_buf = self.decoder.AllocateAllBuffers(
+        # Enable decoder input buffers.
+        ec, self.cpp_in_buf = self.decoder.EnableBuffers(
                 self.decoder_in_port,
                 self.in_buf_size)
         e |= ec
@@ -276,79 +185,32 @@ class JPEGDecoder(object):
             if sz != self.in_buf_size:
                 self.in_buf_size = sz
 
-        # Wait until resizer and decoder are in state Idle.
-        self.resizer.WaitForState(OMX_StateIdle)
-        self.decoder.WaitForState(OMX_StateIdle)
+        # Alternate set up stops here.
+        if self.alt_setup:
+            # Buffers for resizer output port has not been allocated.
+            self.num_out_buf = 0
 
-        # Request decoder to change state to Executing.
-        e |= self.decoder.ChangeState(OMX_StateExecuting)
+        else:
+            # Modify settings of resizer output port.
+            e |= self.resizerSetOutputDefinition(
+                    coding=OMX_IMAGE_CodingUnused,
+                    color=self.out_format,
+                    width=self.out_width,
+                    height=self.out_height)
 
-        # Wait until decoder is in state Executing.
-        self.decoder.WaitForState(OMX_StateExecuting)
+            # Move resizer to state Idle.
+            e |= self.resizer.ChangeState(OMX_StateIdle, self.timeout)
 
-        # Set ready flag.
-        if e == OMX_ErrorNone:
-            self.ready = True
-            cons_print('%s: Ready.' % self.name)
-
-        return e
-
-    #---------------------------------------------------------------------------
-    def AltSetup(self):
-        """
-        Alternate Set Up for the JPEG Decoder
-
-        This set up sequence is used by Matt Ownby and Anthong Sale in the
-        hello_jpeg demo program.
-
-        Return value:
-            <int>       Error code: 0 for success, not 0 for failure.
-                            1 = Decoder not in state Loaded.
-                            2 = Resizer not in state Loaded.
-        """
-
-        # Ensure that both components are in state Loaded.
-        if self.decoder.c_app_data.current_state != OMX_StateLoaded:
-            print ('%s.Setup: Decoder not in state Loaded.' % self.name)
-            return 1
-        if self.resizer.c_app_data.current_state != OMX_StateLoaded:
-            print ('%s.Setup: Resizer not in state Loaded.' % self.name)
-            return 2
-
-        # Set format of decoder input port.
-        e = self.decoder.SetImagePortFormat(
-                self.decoder_in_port,
-                OMX_IMAGE_CodingJPEG,
-                OMX_COLOR_FormatUnused)
-
-        # Enable decoder input.
-        e |= self.decoder.EnablePort(self.decoder_in_port, self.timeout)
-
-        # Request decoder to change state to Idle.
-        e |= self.decoder.ChangeState(OMX_StateIdle)
-
-        # Allocate buffers to decoder input port.
-        ec, self.cpp_in_buf = self.decoder.AllocateAllBuffers(
-                self.decoder_in_port,
-                self.in_buf_size)
-        e |= ec
-        self.num_in_buf = len(self.cpp_in_buf)
-        if ec == OMX_ErrorNone:
-            sz = len(self.cpp_in_buf[0][0])
-            if sz != self.in_buf_size:
-                self.in_buf_size = sz
-
-        # Wait until decoder is in state Idle.
-        self.decoder.WaitForState(OMX_StateIdle)
-
-        # Request decoder to change state to Executing.
-        e |= self.decoder.ChangeState(OMX_StateExecuting)
-
-        # Wait until decoder is in state Executing.
-        self.decoder.WaitForState(OMX_StateExecuting)
-
-        # Buffers for resizer output port has not been allocated.
-        self.num_out_buf = 0
+            # Enable resizer output buffers.
+            ec, self.cpp_out_buf = self.resizer.EnableBuffers(
+                    self.resizer_out_port,
+                    self.out_buf_size)
+            e |= ec
+            self.num_out_buf = len(self.cpp_out_buf)
+            if ec == OMX_ErrorNone:
+                sz = len(self.cpp_out_buf[0][0])
+                if sz != self.out_buf_size:
+                    self.out_buf_size = sz
 
         # Set ready flag.
         if e == OMX_ErrorNone:
@@ -376,26 +238,18 @@ class JPEGDecoder(object):
                 self.resizer,
                 self.resizer_in_port)
 
-        # Set up tunnel between decoder output and resizer input.
+        # Place decoder-resizer tunnel.
         e |= self.decoder.PlaceOutTunnel(self.decoder_out_port,
                 self.resizer, self.resizer_in_port)
 
-        # Request resizer to change state to Executing.
-        e |= self.resizer.ChangeState(OMX_StateExecuting)
+        # Move resizer to state Executing.
+        e |= self.resizer.ChangeState(OMX_StateExecuting, self.timeout)
 
-        # Wait until resizer is in state Executing.
-        self.resizer.WaitForState(OMX_StateExecuting)
-
-        # Enable decoder output and resizer input.
-        # Non-supplier port is enabled first and supplier port second.
-        e |= self.decoder.EnablePort(self.decoder_out_port)
-        e |= self.resizer.EnablePort(self.resizer_in_port, self.timeout)
+        # Enable decoder-resizer tunnel.
+        e |= self.decoder.EnableOutTunnel(self.resizer)
 
         # Resizer output port should generate a settings changed event.
         self.resizer.WaitForPortSettingsChanged(self.resizer_out_port)
-
-        # Decoder output should be enabled.
-        self.decoder.WaitForPortEnabled(self.decoder_out_port, self.timeout)
 
         return e
 
@@ -404,7 +258,7 @@ class JPEGDecoder(object):
         """
         Once the settings of the decoder output port change after the very first
         decoder input buffer load is converted, complete the set up for the JPEG
-        decoder, initially started by AltSetup call.
+        decoder, initially started by the alternate set up.
 
         This first-time handler is adapted from the hello_jpeg demo program by
         Matt Ownby and Anthong Sale.
@@ -413,52 +267,24 @@ class JPEGDecoder(object):
             <int>       Error code: 0 for success, not 0 for failure.
         """
 
-        # Copy decoder output port settings to resizer input port.
-        e = self.CopyPortDefinition(
-                self.decoder,
-                self.decoder_out_port,
-                self.resizer,
-                self.resizer_in_port)
-
-        # Set up tunnel between decoder output and resizer input.
-        e |= self.decoder.PlaceOutTunnel(self.decoder_out_port,
-                self.resizer, self.resizer_in_port)
-
-        # Enable decoder output and resizer input.
-        # Non-supplier port is enabled first and supplier port second.
-        e |= self.decoder.EnablePort(self.decoder_out_port)
-        e |= self.resizer.EnablePort(self.resizer_in_port, self.timeout)
-
-        # Request resizer to change state to Idle.
-        e |= self.resizer.ChangeState(OMX_StateIdle)
-
-        # Resizer output port should generate a settings change event.
-        self.resizer.WaitForPortSettingsChanged(self.resizer_out_port)
-
-        # Decoder output should be enabled.
-        self.decoder.WaitForPortEnabled(self.decoder_out_port, self.timeout)
-
-        # Wait until resizer is in state Idle.
-        self.resizer.WaitForState(OMX_StateIdle)
+        if not self.alt_setup:
+            return self.SetupTunnel()
 
         # Modify settings of resizer output port.
-        e |= self.resizerSetOutputDefinition(
+        e = self.resizerSetOutputDefinition(
                 coding=OMX_IMAGE_CodingUnused,
                 color=self.out_format,
                 width=self.out_width,
                 height=self.out_height)
 
-        # Request resizer to change state to Executing.
-        e |= self.resizer.ChangeState(OMX_StateExecuting)
+        # Move resizer to state Idle.
+        e |= self.resizer.ChangeState(OMX_StateIdle, self.timeout)
 
-        # Wait until resizer is in state Executing.
-        self.resizer.WaitForState(OMX_StateExecuting)
+        # Set up decoder-resizer tunnel.
+        e |= self.SetupTunnel()
 
-        # Enable resizer output.
-        e |= self.resizer.EnablePort(self.resizer_out_port)
-
-        # Allocate buffers to resizer output port.
-        ec, self.cpp_out_buf = self.resizer.AllocateAllBuffers(
+        # Enable resizer output buffers.
+        ec, self.cpp_out_buf = self.resizer.EnableBuffers(
                 self.resizer_out_port,
                 self.out_buf_size)
         e |= ec
@@ -467,9 +293,6 @@ class JPEGDecoder(object):
             sz = len(self.cpp_out_buf[0][0])
             if sz != self.out_buf_size:
                 self.out_buf_size = sz
-
-        # Resizer output should be enabled.
-        self.resizer.WaitForPortEnabled(self.resizer_out_port, self.timeout)
 
         return e
 
@@ -650,10 +473,7 @@ class JPEGDecoder(object):
 
             # Complete JPEG decoder set up.
             self.decoder.c_app_data.port_changed = 0
-            if not self.alt_setup:
-                e = self.SetupTunnel()
-            else:
-                e = self.SetupPipe()
+            e = self.SetupPipe()
             if not e:
                 self.setup_complete = True
 
@@ -664,22 +484,8 @@ class JPEGDecoder(object):
                 return 0
             self.decoder.c_app_data.port_changed = 0
 
-            # Get buffer supplier for decoder output port.
-            e, bs = self.decoder.GetBufferSupplier(self.decoder_out_port)
-            if e != OMX_ErrorNone:
-                print '%s: Failed to get buffer supplier for decoder output.'
-                bs = OMX_BufferSupplyInput
-
-            # Disable resizer input and decoder output.
-            # Supplier port is disabled first and non-supplier port second.
-            if bs == OMX_BufferSupplyInput: # Supplier is resizer input port.
-                e |= self.resizer.DisablePort(self.resizer_in_port)
-                e |= self.decoder.DisablePort(self.decoder_out_port, self.timeout)
-                self.resizer.WaitForPortDisabled(self.resizer_in_port, self.timeout)
-            else:
-                e |= self.decoder.DisablePort(self.decoder_out_port)
-                e |= self.resizer.DisablePort(self.resizer_in_port, self.timeout)
-                self.decoder.WaitForPortDisabled(self.decoder_out_port, self.timeout)
+            # Disable decoder-resizer tunnel.
+            e = self.decoder.DisableOutTunnel(self.resizer)
 
             # Copy decoder output port settings to resizer input port.
             e |= self.CopyPortDefinition(
@@ -688,16 +494,8 @@ class JPEGDecoder(object):
                     self.resizer,
                     self.resizer_in_port)
 
-            # Re-enable decoder output and resizer input ports.
-            # Non-supplier port is enabled first and supplier port second.
-            if bs == OMX_BufferSupplyInput: # Supplier is resizer input port.
-                e |= self.decoder.EnablePort(self.decoder_out_port)
-                e |= self.resizer.EnablePort(self.resizer_in_port, self.timeout)
-                self.decoder.WaitForPortEnabled(self.decoder_out_port, self.timeout)
-            else:
-                e |= self.resizer.EnablePort(self.resizer_in_port)
-                e |= self.decoder.EnablePort(self.decoder_out_port, self.timeout)
-                self.resizer.WaitForPortEnabled(self.resizer_in_port, self.timeout)
+            # Re-enable decoder-resizer tunnel.
+            e |= self.decoder.EnableOutTunnel(self.resizer)
 
             # Resizer output port should generate a settings change event.
             self.resizer.WaitForPortSettingsChanged(self.resizer_out_port)
